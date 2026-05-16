@@ -11,6 +11,7 @@ import json
 import os
 import socket
 import urllib.parse  # NEW: For parsing URLs
+import time
 
 # ============================================
 # CONFIGURATION - Change these as needed
@@ -1016,6 +1017,237 @@ HTML_TEMPLATE = """
         /* [CHANGE v3 FIX] Removed: tbody tr { animation: row-in 0.2s ease both; }
            Animation is now applied selectively via JS only on first load. */
         tbody tr.animate-in { animation: row-in 0.2s ease both; }
+
+        /* ============================================================
+           APPS MODAL — Slide-in overlay for Unique Apps drill-down.
+           Clicking the Unique Apps stat opens this modal showing all
+           unique app names with their activity counts. Clicking an
+           individual app name filters the main table.
+        ============================================================ */
+        .apps-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(4px);
+            z-index: 900;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.25s ease, visibility 0.25s ease;
+        }
+
+        .apps-modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .apps-modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.95);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            width: 440px;
+            max-width: 92vw;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            z-index: 950;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.25s ease, visibility 0.25s ease, transform 0.25s ease;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+        }
+
+        .apps-modal.active {
+            opacity: 1;
+            visibility: visible;
+            transform: translate(-50%, -50%) scale(1);
+        }
+
+        .apps-modal__header {
+            padding: 18px 22px;
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .apps-modal__header h2 {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .apps-modal__header h2 .count-badge {
+            font-size: 11px;
+            font-weight: 600;
+            background: var(--green-dim);
+            color: var(--green);
+            border: 1px solid rgba(0, 224, 160, 0.2);
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-family: var(--font-mono);
+        }
+
+        .apps-modal__close {
+            width: 30px;
+            height: 30px;
+            border-radius: var(--radius-sm);
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background var(--transition), color var(--transition), border-color var(--transition);
+            flex-shrink: 0;
+        }
+
+        .apps-modal__close:hover {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .apps-modal__body {
+            overflow-y: auto;
+            padding: 8px 0;
+            flex: 1;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
+        }
+
+        .apps-modal__body::-webkit-scrollbar { width: 4px; }
+        .apps-modal__body::-webkit-scrollbar-track { background: transparent; }
+        .apps-modal__body::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 999px;
+        }
+
+        .app-list-item {
+            padding: 11px 22px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            cursor: pointer;
+            transition: background var(--transition);
+            border-left: 3px solid transparent;
+        }
+
+        .app-list-item:hover {
+            background: var(--surface-hover);
+            border-left-color: var(--accent);
+        }
+
+        .app-list-item__name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            flex: 1;
+        }
+
+        .app-list-item__count {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+            padding: 2px 9px;
+            border-radius: 999px;
+            flex-shrink: 0;
+        }
+
+        .app-list-item__arrow {
+            color: var(--text-muted);
+            font-size: 12px;
+            flex-shrink: 0;
+            transition: color var(--transition), transform var(--transition);
+        }
+
+        .app-list-item:hover .app-list-item__arrow {
+            color: var(--accent);
+            transform: translateX(2px);
+        }
+
+        /* Active filter banner shown above the table when filtering by app */
+        .active-filter-bar {
+            background: var(--accent-dim);
+            border-left: 1px solid var(--border);
+            border-right: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            padding: 9px 22px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+            font-family: var(--font-mono);
+            display: none;
+        }
+
+        .active-filter-bar.visible { display: flex; }
+
+        .active-filter-bar .clear-filter {
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            font-family: var(--font-ui);
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: background var(--transition), border-color var(--transition), color var(--transition);
+        }
+
+        .active-filter-bar .clear-filter:hover {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* Make the Unique Apps stat clickable */
+        .stat-item.clickable {
+            cursor: pointer;
+            position: relative;
+        }
+
+        .stat-item.clickable::after {
+            content: '›';
+            position: absolute;
+            right: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 20px;
+            color: var(--text-muted);
+            transition: color var(--transition), transform var(--transition);
+        }
+
+        .stat-item.clickable:hover::after {
+            color: var(--green);
+            transform: translateY(-50%) translateX(3px);
+        }
+
+        .stat-item.clickable:hover {
+            background: var(--surface-raised);
+        }
     </style>
 </head>
 
@@ -1081,7 +1313,7 @@ HTML_TEMPLATE = """
                     <div class="stat-value" id="totalCount">—</div>
                 </div>
             </div>
-            <div class="stat-item">
+            <div class="stat-item clickable" id="uniqueAppsStat" title="Click to see all unique apps">
                 <div class="stat-icon green"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--green)"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></div>
                 <div>
                     <div class="stat-label">Unique Apps</div>
@@ -1159,6 +1391,12 @@ HTML_TEMPLATE = """
             <span id="filterStatus">Loading&hellip;</span>
         </div>
 
+        <!-- Active filter bar — shown when filtering by a specific app -->
+        <div class="active-filter-bar" id="activeFilterBar">
+            <span>Filtering: <span id="activeFilterName"></span></span>
+            <button class="clear-filter" id="clearFilterBtn">✕ Clear Filter</button>
+        </div>
+
         <!-- ============================================================
              DATA TABLE
              [CHANGE] Replaced <div class="table-container"> with .table-wrapper.
@@ -1187,6 +1425,44 @@ HTML_TEMPLATE = """
         </footer>
 
     </div><!-- /.app-shell -->
+
+    <!-- Apps Modal Overlay -->
+    <div class="apps-modal-overlay" id="appsModalOverlay"></div>
+    <div class="apps-modal" id="appsModal">
+        <div class="apps-modal__header">
+            <h2>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--green)"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+                Unique Apps
+                <span class="count-badge" id="modalAppCount">0</span>
+            </h2>
+            <button class="apps-modal__close" id="appsModalClose">&times;</button>
+        </div>
+        <div class="apps-modal__body" id="appsModalBody">
+            <!-- App list items inserted by JS -->
+        </div>
+    </div>
+
+    <!-- Export Modal Overlay -->
+    <div class="apps-modal-overlay" id="exportModalOverlay"></div>
+    <div class="apps-modal" id="exportModal" style="width: 380px;">
+        <div class="apps-modal__header">
+            <h2>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Export Data
+            </h2>
+            <button class="apps-modal__close" id="exportModalClose">&times;</button>
+        </div>
+        <div class="apps-modal__body" style="padding: 20px 22px; display: flex; flex-direction: column; gap: 12px; overflow-y: visible;">
+            <button class="btn-export" id="btnExportCurrent" style="width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; font-size: 13px;">
+                <span><strong style="display:block; margin-bottom:2px;">Export Current View</strong><span style="font-weight:400; opacity:0.9;">Download only what's currently filtered</span></span>
+                <span style="font-size: 16px;">↓</span>
+            </button>
+            <button class="btn-export" id="btnExportFull" style="width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; font-size: 13px; background: var(--surface-raised); color: var(--text-primary); border: 1px solid var(--border);">
+                <span><strong style="display:block; margin-bottom:2px;">Download Full History</strong><span style="font-weight:400; color:var(--text-secondary);">The complete original Logs</span></span>
+                <span style="font-size: 16px; color: var(--text-muted);">↓</span>
+            </button>
+        </div>
+    </div>
 
 
     <script>
@@ -1229,7 +1505,8 @@ HTML_TEMPLATE = """
             allLogs:           [],    // Full dataset from the last server response
             autoRefresh:       true,  // Whether the polling interval should fire
             refreshIntervalId: null,  // setInterval handle — stored so we can cancel it
-            firstLoad:         true   // True only until the first table render completes
+            firstLoad:         true,  // True only until the first table render completes
+            lastTimeStr:       ''     // Keeps track of the last successful timestamp
         };
 
         // ============================================
@@ -1265,9 +1542,16 @@ HTML_TEMPLATE = """
         // ============================================
 
         function loadLogs() {
-            console.log("Fetching logs from:", apiUrl);
+            // Include appFilter in the API request if present
+            let currentApiUrl = apiUrl;
+            if (state.appFilter) {
+                const separator = currentApiUrl.includes('?') ? '&' : '?';
+                currentApiUrl += `${separator}app=${encodeURIComponent(state.appFilter)}`;
+            }
 
-            fetch(apiUrl)
+            console.log("Fetching logs from:", currentApiUrl);
+
+            fetch(currentApiUrl)
                 .then(response => {
                     console.log("Response status:", response.status);
                     if (!response.ok) {
@@ -1301,8 +1585,18 @@ HTML_TEMPLATE = """
                 })
                 .catch(error => {
                     console.error("Error fetching logs:", error);
-                    // [CHANGE] Delegated to showError() helper
-                    showError('Cannot connect to server. Make sure server is running and you are using the correct URL with password.');
+                    
+                    // If we already have logs displaying, keep them on screen!
+                    // Just update the timestamp to show we are disconnected.
+                    if (state.allLogs && state.allLogs.length > 0) {
+                        const lastUpdateElem = document.getElementById('lastUpdate');
+                        if (lastUpdateElem) {
+                            lastUpdateElem.innerHTML = `<span style="color: #ff5270; font-weight: 600;">Server Offline</span> <span style="opacity: 0.7; font-size: 0.9em; margin-left: 6px;">(Last: ${state.lastTimeStr})</span>`;
+                        }
+                    } else {
+                        // Only show the big error screen if we never successfully loaded logs
+                        showError('Cannot connect to server. Make sure server is running and you are using the correct URL with password.');
+                    }
                 });
         }
 
@@ -1316,7 +1610,14 @@ HTML_TEMPLATE = """
             // [CHANGE] toLocaleString() adds thousand separators (e.g. 1,234)
             document.getElementById('totalCount').textContent = total.toLocaleString();
             document.getElementById('uniqueApps').textContent = uniqueApps;
-            document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+            state.lastTimeStr = new Date().toLocaleTimeString();
+            
+            const lastUpdateElem = document.getElementById('lastUpdate');
+            if (state.autoRefresh) {
+                lastUpdateElem.innerHTML = `<span class="live-dot" style="margin-right: 6px; display: inline-block;"></span>${state.lastTimeStr}`;
+            } else {
+                lastUpdateElem.innerHTML = `<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--text-muted); margin-right:6px; opacity:0.8;"></span>${state.lastTimeStr}`;
+            }
         }
 
         // ============================================
@@ -1331,17 +1632,27 @@ HTML_TEMPLATE = """
             // [CHANGE] Read from state.allLogs instead of global allLogs
             let filteredLogs = state.allLogs;
 
+            // Apply app filter if active
+            if (state.appFilter) {
+                filteredLogs = filteredLogs.filter(log => (log.app || 'Unknown') === state.appFilter);
+            }
+
             if (searchTerm !== '') {
-                filteredLogs = state.allLogs.filter(log => {
+                filteredLogs = filteredLogs.filter(log => {
                     return (
                         (log.app && log.app.toLowerCase().includes(searchTerm)) ||
                         (log.window && log.window.toLowerCase().includes(searchTerm))
                     );
                 });
             }
+
             const filterSpan = document.getElementById('filterStatus');
             if (filterSpan) {
-                if (searchTerm !== '') {
+                if (state.appFilter && searchTerm !== '') {
+                    filterSpan.innerHTML = `<span class="hl">${filteredLogs.length}</span> result${filteredLogs.length !== 1 ? 's' : ''} for &ldquo;${searchTerm}&rdquo; in <strong>${escapeHtml(state.appFilter)}</strong>`;
+                } else if (state.appFilter) {
+                    filterSpan.innerHTML = `<span class="hl">${filteredLogs.length}</span> activit${filteredLogs.length !== 1 ? 'ies' : 'y'} for <strong>${escapeHtml(state.appFilter)}</strong>`;
+                } else if (searchTerm !== '') {
                     // [CHANGE] Wrapped count in <span class="hl"> for accent highlight
                     filterSpan.innerHTML = `<span class="hl">${filteredLogs.length}</span> result${filteredLogs.length !== 1 ? 's' : ''} for &ldquo;${searchTerm}&rdquo;`;
                 } else {
@@ -1443,20 +1754,24 @@ HTML_TEMPLATE = """
         // FUNCTION: Export to CSV
         // ============================================
 
-        function exportToCSV() {
+        function exportToCSV(ignoreSearch = false, limit200 = false) {
             const searchInput = document.getElementById('searchInput');
-            const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
+            const searchTerm = (!ignoreSearch && searchInput) ? searchInput.value.toLowerCase() : '';
 
             // [CHANGE] Read from state.allLogs instead of global allLogs
             let logsToExport = state.allLogs;
 
             if (searchTerm !== '') {
-                logsToExport = state.allLogs.filter(log => {
+                logsToExport = logsToExport.filter(log => {
                     return (
                         (log.app && log.app.toLowerCase().includes(searchTerm)) ||
                         (log.window && log.window.toLowerCase().includes(searchTerm))
                     );
                 });
+            }
+
+            if (limit200) {
+                logsToExport = logsToExport.slice(0, 200);
             }
             if (logsToExport.length === 0) {
                 alert('No data to export!');
@@ -1470,14 +1785,25 @@ HTML_TEMPLATE = """
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            // [CHANGE] Filename includes timestamp to prevent accidental overwrite.
-            // Original always saved as 'crosswatch_export.csv'.
-            a.download = `crosswatch_export_${Date.now()}.csv`;
+            
+            // Generate unique filename based on active filters
+            let filename = `crosswatch_200_logs_export_${Date.now()}.csv`;
+            if (state.appFilter) {
+                const safeApp = state.appFilter.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                if (searchTerm !== '') {
+                    filename = `crosswatch_${safeApp}_search_export_${Date.now()}.csv`;
+                } else {
+                    filename = `crosswatch_${safeApp}_export_${Date.now()}.csv`;
+                }
+            } else if (searchTerm !== '') {
+                filename = `crosswatch_search_export_${Date.now()}.csv`;
+            }
+            
+            a.download = filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            alert("✅ CSV Export Complete!");
         }
 
         // ============================================
@@ -1552,7 +1878,7 @@ HTML_TEMPLATE = """
             }
             const exportBtn = document.getElementById('exportBtn');
             if (exportBtn) {
-                exportBtn.addEventListener('click', exportToCSV);
+                exportBtn.addEventListener('click', openExportModal);
             }
             const darkModeBtn = document.getElementById('darkModeBtn');
             if (darkModeBtn) {
@@ -1564,8 +1890,227 @@ HTML_TEMPLATE = """
                     // [CHANGE] Write to state.autoRefresh instead of global autoRefreshEnabled
                     state.autoRefresh = e.target.checked;
                     console.log("Auto-refresh:", state.autoRefresh ? "ON" : "OFF");
+                    
+                    // Immediately drop the green blink if we pause
+                    const lastUpdateElem = document.getElementById('lastUpdate');
+                    if (state.lastTimeStr && lastUpdateElem && !lastUpdateElem.innerHTML.includes('Offline')) {
+                        if (state.autoRefresh) {
+                            lastUpdateElem.innerHTML = `<span class="live-dot" style="margin-right: 6px; display: inline-block;"></span>${state.lastTimeStr}`;
+                        } else {
+                            lastUpdateElem.innerHTML = `<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--text-muted); margin-right:6px; opacity:0.8;"></span>${state.lastTimeStr}`;
+                        }
+                    }
                 });
             }
+
+            // ============================================
+            // UNIQUE APPS MODAL — Click handlers
+            // ============================================
+            const uniqueAppsStat = document.getElementById('uniqueAppsStat');
+            if (uniqueAppsStat) {
+                uniqueAppsStat.addEventListener('click', openAppsModal);
+            }
+
+            const appsModalOverlay = document.getElementById('appsModalOverlay');
+            if (appsModalOverlay) {
+                appsModalOverlay.addEventListener('click', closeAppsModal);
+            }
+
+            const appsModalClose = document.getElementById('appsModalClose');
+            if (appsModalClose) {
+                appsModalClose.addEventListener('click', closeAppsModal);
+            }
+
+            const clearFilterBtn = document.getElementById('clearFilterBtn');
+            if (clearFilterBtn) {
+                clearFilterBtn.addEventListener('click', clearAppFilter);
+            }
+
+            // ============================================
+            // EXPORT MODAL — Click handlers
+            // ============================================
+            const exportModalOverlay = document.getElementById('exportModalOverlay');
+            if (exportModalOverlay) exportModalOverlay.addEventListener('click', closeExportModal);
+            
+            const exportModalClose = document.getElementById('exportModalClose');
+            if (exportModalClose) exportModalClose.addEventListener('click', closeExportModal);
+            
+            const btnExportCurrent = document.getElementById('btnExportCurrent');
+            if (btnExportCurrent) {
+                btnExportCurrent.addEventListener('click', () => {
+                    closeExportModal();
+                    if (state.appFilter) {
+                        exportToCSV(false, true); // Don't ignore search, limit to 200
+                    } else {
+                        exportToCSV(false, false);
+                    }
+                });
+            }
+            
+            const btnExportFull = document.getElementById('btnExportFull');
+            if (btnExportFull) {
+                btnExportFull.addEventListener('click', () => {
+                    closeExportModal();
+                    let url = '/api/download-csv';
+                    if (currentPassword) url += `?password=${currentPassword}`;
+                    window.location.href = url;
+                });
+            }
+
+            // Close modals on Escape key
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    closeAppsModal();
+                    if (typeof closeExportModal === 'function') closeExportModal();
+                }
+            });
+        }
+
+        // ============================================
+        // UNIQUE APPS MODAL — Functions
+        // ============================================
+
+        function openAppsModal() {
+            // Show modal with loading state
+            const body = document.getElementById('appsModalBody');
+            body.innerHTML = `
+                <div class="empty-state" style="padding:40px 20px;">
+                    <p>Loading apps...</p>
+                </div>
+            `;
+            document.getElementById('appsModalOverlay').classList.add('active');
+            document.getElementById('appsModal').classList.add('active');
+
+            // Fetch all unique apps and their counts from the server
+            let fetchUrl = '/api/unique-apps';
+            if (currentPassword) {
+                fetchUrl += `?password=${currentPassword}`;
+            }
+
+            fetch(fetchUrl)
+                .then(res => res.json())
+                .then(data => {
+                    const sorted = data.apps || [];
+                    document.getElementById('modalAppCount').textContent = sorted.length;
+
+                    if (sorted.length === 0) {
+                        body.innerHTML = `
+                            <div class="empty-state" style="padding:40px 20px;">
+                                <div class="empty-icon">📭</div>
+                                <p>No apps recorded yet.</p>
+                            </div>
+                        `;
+                    } else {
+                        body.innerHTML = sorted.map(appObj => `
+                            <div class="app-list-item" data-app="${escapeHtml(appObj.name)}">
+                                <span class="app-list-item__name">${escapeHtml(appObj.name)}</span>
+                                <span class="app-list-item__count">${appObj.count}</span>
+                                <span class="app-list-item__arrow">›</span>
+                            </div>
+                        `).join('');
+
+                        // Attach click handlers
+                        body.querySelectorAll('.app-list-item').forEach(item => {
+                            item.addEventListener('click', () => {
+                                const appName = item.getAttribute('data-app');
+                                filterByApp(appName);
+                                closeAppsModal();
+                            });
+                        });
+                    }
+                })
+                .catch(err => {
+                    console.error("Failed to load unique apps:", err);
+                    body.innerHTML = `
+                        <div class="empty-state" style="padding:40px 20px;">
+                            <div class="empty-icon">⚠️</div>
+                            <p>Error loading apps.</p>
+                        </div>
+                    `;
+                });
+        }
+
+        function closeAppsModal() {
+            document.getElementById('appsModalOverlay').classList.remove('active');
+            document.getElementById('appsModal').classList.remove('active');
+        }
+
+        function filterByApp(appName) {
+            // Store the active app filter
+            state.appFilter = appName;
+
+            // Show the active filter bar
+            const filterBar = document.getElementById('activeFilterBar');
+            document.getElementById('activeFilterName').textContent = appName;
+            filterBar.classList.add('visible');
+
+            // Clear search input
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) searchInput.value = '';
+
+            // Fetch the full history for this app from the server
+            loadLogs();
+        }
+
+        function clearAppFilter() {
+            state.appFilter = null;
+            document.getElementById('activeFilterBar').classList.remove('visible');
+
+            // Clear search and show all
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) searchInput.value = '';
+
+            // Fetch the default 200 logs from the server
+            loadLogs();
+        }
+
+        // ============================================
+        // EXPORT MODAL — Functions
+        // ============================================
+
+        function openExportModal() {
+            const btnCurrent = document.getElementById('btnExportCurrent');
+            
+            if (state.appFilter) {
+                btnCurrent.innerHTML = `
+                    <span><strong style="display:block; margin-bottom:2px;">Export Recent 200</strong><span style="font-weight:400; opacity:0.9;">Download up to 200 recent logs for this app</span></span>
+                    <span style="font-size: 16px;">↓</span>
+                `;
+                
+                // If an app is filtered, show an extra option to get ALL logs for that app
+                let btnAppFull = document.getElementById('btnExportAppFull');
+                if (!btnAppFull) {
+                    btnAppFull = document.createElement('button');
+                    btnAppFull.id = 'btnExportAppFull';
+                    btnAppFull.className = 'btn-export';
+                    btnAppFull.style = 'width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; font-size: 13px; background: var(--surface-raised); color: var(--text-primary); border: 1px solid var(--border);';
+                    btnAppFull.addEventListener('click', () => {
+                        closeExportModal();
+                        exportToCSV(true, false); // ignore text search, no limit
+                    });
+                    document.getElementById('btnExportFull').before(btnAppFull);
+                }
+                btnAppFull.style.display = 'flex';
+                btnAppFull.innerHTML = `
+                    <span><strong style="display:block; margin-bottom:2px;">Download ${escapeHtml(state.appFilter)} Full History</strong><span style="font-weight:400; color:var(--text-secondary);">Export full app history</span></span>
+                    <span style="font-size: 16px; color: var(--text-muted);">↓</span>
+                `;
+            } else {
+                btnCurrent.innerHTML = `
+                    <span><strong style="display:block; margin-bottom:2px;">Export Current View</strong><span style="font-weight:400; opacity:0.9;">Download only what's currently shown</span></span>
+                    <span style="font-size: 16px;">↓</span>
+                `;
+                const btnAppFull = document.getElementById('btnExportAppFull');
+                if (btnAppFull) btnAppFull.style.display = 'none';
+            }
+
+            document.getElementById('exportModalOverlay').classList.add('active');
+            document.getElementById('exportModal').classList.add('active');
+        }
+
+        function closeExportModal() {
+            document.getElementById('exportModalOverlay').classList.remove('active');
+            document.getElementById('exportModal').classList.remove('active');
         }
 
         // ============================================
@@ -1749,6 +2294,7 @@ class CrossWatchHandler(BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
 
+            app_filter = query_params.get('app', [None])[0]
             logs = []
 
             try:
@@ -1760,30 +2306,39 @@ class CrossWatchHandler(BaseHTTPRequestHandler):
                         'logs': []
                     }
                 else:
+                    total_count = 0
+                    unique_apps_set = set()
+                    
                     with open('activity_log.csv', 'r', encoding='utf-8', errors='ignore') as file:
                         reader = csv.DictReader(file)
                         for row in reader:
                             if not row.get('Timestamp'):
                                 continue
+                            
+                            app_name = row.get('Application', '')
+                            total_count += 1
+                            if app_name:
+                                unique_apps_set.add(app_name)
+                                
+                            if app_filter and app_filter != app_name:
+                                continue
+
                             log_entry = {
                                 'timestamp': row.get('Timestamp', ''),
                                 'counter': row.get('Counter', ''),
-                                'app': row.get('Application', ''),
+                                'app': app_name,
                                 'window': row.get('Window Title', '')[:100]
                             }
                             logs.append(log_entry)
 
-                    unique_apps_set = set()
-                    for log in logs:
-                        if log['app']:
-                            unique_apps_set.add(log['app'])
                     unique_apps_count = len(unique_apps_set)
 
                     logs.reverse()
-                    logs = logs[:200]
+                    if not app_filter:
+                        logs = logs[:200]
 
                     response = {
-                        'total': len(logs),
+                        'total': total_count,
                         'unique_apps': unique_apps_count,
                         'logs': logs
                     }
@@ -1797,6 +2352,58 @@ class CrossWatchHandler(BaseHTTPRequestHandler):
                 }
 
             self.wfile.write(json.dumps(response, indent=2, ensure_ascii=False).encode('utf-8'))
+
+        # ============================================
+        # OPTION 3b: Unique Apps API — returns per-app counts
+        # ============================================
+
+        elif path == '/api/unique-apps':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+
+            app_counts = {}
+            try:
+                if os.path.exists('activity_log.csv'):
+                    with open('activity_log.csv', 'r', encoding='utf-8', errors='ignore') as file:
+                        reader = csv.DictReader(file)
+                        for row in reader:
+                            app = row.get('Application', '').strip()
+                            if app:
+                                app_counts[app] = app_counts.get(app, 0) + 1
+            except Exception as error:
+                pass
+
+            response = {
+                'apps': [{'name': k, 'count': v} for k, v in sorted(app_counts.items(), key=lambda x: -x[1])]
+            }
+            self.wfile.write(json.dumps(response, indent=2, ensure_ascii=False).encode('utf-8'))
+
+        # ============================================
+        # OPTION 3c: Download full original CSV
+        # ============================================
+
+        elif path == '/api/download-csv':
+            try:
+                if os.path.exists('activity_log.csv'):
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/csv')
+                    unique_id = int(time.time() * 1000)
+                    filename = f'crosswatch_full_logs_export_{unique_id}.csv'
+                    self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    with open('activity_log.csv', 'rb') as f:
+                        self.wfile.write(f.read())
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    self.wfile.write(b'File not found')
+            except Exception as error:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(error).encode('utf-8'))
 
         # ============================================
         # OPTION 4: Any other URL
