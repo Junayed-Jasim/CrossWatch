@@ -753,9 +753,9 @@ HTML_TEMPLATE = """
             font-size: 24px;
         }
         body.light-mode .login-logo {
-            background: var(--accent);
-            border-color: var(--accent);
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+            background: #ffffff;
+            border: 2px solid rgba(37, 99, 235, 0.35);
+            box-shadow: 0 4px 16px rgba(37, 99, 235, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
         }
 
         .login-brand h1 {
@@ -763,6 +763,7 @@ HTML_TEMPLATE = """
             color: var(--text-primary); line-height: 1.2;
         }
         .login-brand h1 span { color: var(--accent); }
+        body.light-mode .login-brand h1 span { color: #2563EB; }
 
         .login-brand p {
             margin-top: 6px; font-size: 14px;
