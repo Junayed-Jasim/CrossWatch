@@ -1,5 +1,5 @@
-# CrossWatch Web Server - Project 5: Project 4 + WebSocket Live Streaming
-# Features: All Project 4 features + real-time WebSocket activity feed
+# CrossWatch Web Server - Project 6: Basic Security (password + session tokens)
+# Features: Project 5 live feed + random session token after login
 # Author: CrossWatch Project
 
 # ============================================
@@ -15,6 +15,7 @@ import time
 import threading
 import asyncio
 import io
+import secrets
 
 try:
     import websockets
@@ -27,7 +28,11 @@ except ImportError:
 # CONFIGURATION
 # ============================================
 
-SECRET_PASSWORD = "crosswatch123"
+SECRET_PASSWORD = "crosswatch123"  # Only you should know this
+TOKEN_HEADER = "X-Token"
+SESSION_TTL_REMEMBER = 30 * 24 * 3600   # 30 days when "remember me" is checked
+SESSION_TTL_BROWSER = 12 * 3600         # 12 hours for session-only login
+SESSIONS_FILE = 'sessions.json'         # Persist tokens across server restarts
 PORT = 8000
 SERVER_HOST = '0.0.0.0'
 WEBSOCKET_PORT = 8765
@@ -40,6 +45,10 @@ connected_clients = set()
 activity_history = []
 client_lock = threading.Lock()
 ws_event_loop = None  # Saved so the CSV watcher thread can post onto it
+
+# Active login sessions: random token -> expiry (unix timestamp)
+active_sessions = {}
+sessions_lock = threading.Lock()
 
 # ============================================
 # HELPER: Get Local IP
@@ -146,7 +155,23 @@ def watch_csv_file():
 # WEBSOCKET HANDLER
 # ============================================
 
+def _ws_request_path(websocket):
+    """websockets 16+ uses connection.request.path; older versions used .path."""
+    request = getattr(websocket, 'request', None)
+    if request is not None and getattr(request, 'path', None):
+        return request.path
+    return getattr(websocket, 'path', '') or ''
+
+
 async def websocket_handler(websocket):
+    # Browser WebSocket cannot set custom headers — session token in query string
+    parsed = urllib.parse.urlparse(_ws_request_path(websocket))
+    qs = urllib.parse.parse_qs(parsed.query)
+    token = qs.get('token', [None])[0]
+    if not validate_session_token(token):
+        await websocket.close(1008, 'Unauthorized')
+        return
+
     client_address = websocket.remote_address[0] if websocket.remote_address else 'unknown'
     print(f"🔌 WebSocket client connected: {client_address}")
 
@@ -680,10 +705,180 @@ HTML_TEMPLATE = """
             th, td { padding: 9px 12px; }
             .footer { flex-direction: column; text-align: center; padding: 11px 16px; }
         }
+
+        /* Project 6 — minimal login */
+        .unlock-overlay {
+            position: fixed; inset: 0; z-index: 9999;
+            display: none; align-items: center; justify-content: center;
+            padding: 20px;
+            background: var(--bg);
+        }
+        .unlock-overlay.visible { display: flex; }
+
+        .login-theme-fab {
+            position: fixed; top: 20px; right: 20px; z-index: 10000;
+            padding: 8px 14px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            color: var(--text-secondary);
+            font-family: var(--font-ui); font-size: 12px; font-weight: 600;
+            cursor: pointer;
+            transition: border-color var(--transition), color var(--transition);
+        }
+        .login-theme-fab:hover {
+            border-color: var(--accent); color: var(--accent);
+        }
+
+        .login-card {
+            width: 100%; max-width: 400px;
+            padding: 40px 36px 36px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.24);
+        }
+        body.light-mode .login-card {
+            box-shadow: 0 8px 32px rgba(42, 37, 32, 0.08);
+        }
+
+        .login-brand { text-align: center; margin-bottom: 32px; }
+
+        .login-logo {
+            width: 52px; height: 52px; margin: 0 auto 16px;
+            border-radius: 14px;
+            background: var(--accent-dim);
+            border: 1px solid rgba(0, 194, 255, 0.25);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 24px;
+        }
+        body.light-mode .login-logo {
+            background: var(--accent);
+            border-color: var(--accent);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+        }
+
+        .login-brand h1 {
+            font-size: 26px; font-weight: 800; letter-spacing: -0.5px;
+            color: var(--text-primary); line-height: 1.2;
+        }
+        .login-brand h1 span { color: var(--accent); }
+
+        .login-brand p {
+            margin-top: 6px; font-size: 14px;
+            color: var(--text-secondary); font-weight: 500;
+        }
+
+        .login-field { margin-bottom: 20px; }
+
+        .login-field label {
+            display: block; font-size: 13px; font-weight: 600;
+            color: var(--text-secondary); margin-bottom: 8px;
+        }
+
+        .login-input {
+            width: 100%; padding: 12px 14px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--text-primary);
+            font-family: var(--font-ui); font-size: 15px;
+            transition: border-color var(--transition), box-shadow var(--transition);
+        }
+        body.light-mode .login-input { background: #fdfcfa; }
+        .login-input::placeholder { color: var(--text-muted); }
+        .login-input:focus {
+            outline: none; border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .login-options {
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 12px; margin-bottom: 24px; flex-wrap: wrap;
+        }
+
+        .unlock-remember {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 13px; color: var(--text-secondary);
+            cursor: pointer; user-select: none; margin: 0;
+        }
+        .unlock-remember input {
+            width: 15px; height: 15px; margin: 0;
+            cursor: pointer; accent-color: var(--accent);
+        }
+
+        .login-btn {
+            width: 100%; padding: 13px 20px;
+            background: var(--accent); color: #080c14;
+            border: none; border-radius: 10px;
+            font-family: var(--font-ui); font-size: 15px; font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.12s ease, filter var(--transition);
+        }
+        body.light-mode .login-btn { color: #fff; }
+        .login-btn:hover { filter: brightness(1.06); }
+        .login-btn:active { transform: scale(0.98); }
+
+        .unlock-error {
+            display: none;
+            margin-top: 16px; padding: 10px 12px;
+            background: rgba(255, 82, 112, 0.1);
+            border-radius: 8px;
+            color: var(--danger); font-size: 13px;
+            font-weight: 500; text-align: center;
+        }
+        .unlock-error.visible { display: block; }
+
+        .login-hint {
+            margin-top: 24px; text-align: center;
+            font-size: 12px; color: var(--text-muted); line-height: 1.5;
+        }
+
+        body.locked .app-shell {
+            filter: blur(12px);
+            pointer-events: none; user-select: none;
+            opacity: 0.4;
+        }
+        .btn-logout {
+            padding: 7px 15px;
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-secondary);
+            font-family: var(--font-ui); font-size: 12px; font-weight: 600;
+            cursor: pointer;
+            transition: border-color var(--transition), color var(--transition), background var(--transition);
+        }
+        .btn-logout:hover { border-color: #ff5270; color: #ff5270; background: rgba(255, 82, 112, 0.08); }
     </style>
 </head>
 
 <body>
+    <div class="unlock-overlay" id="unlockOverlay" role="dialog" aria-labelledby="loginTitle" aria-modal="true">
+        <button type="button" class="login-theme-fab theme-toggle-btn" id="loginDarkModeBtn" aria-label="Toggle light or dark mode">☀️ Light</button>
+        <div class="login-card">
+            <div class="login-brand">
+                <div class="login-logo" aria-hidden="true">📡</div>
+                <h1 id="loginTitle">Cross<span>Watch</span></h1>
+                <p>Sign in to your dashboard</p>
+            </div>
+            <div class="login-field">
+                <label for="passwordInput">Password</label>
+                <input type="password" id="passwordInput" class="login-input"
+                    placeholder="Your password" autocomplete="current-password">
+            </div>
+            <div class="login-options">
+                <label class="unlock-remember">
+                    <input type="checkbox" id="rememberMe" checked>
+                    <span>Remember me</span>
+                </label>
+            </div>
+            <button type="button" id="unlockBtn" class="login-btn">Continue</button>
+            <p class="unlock-error" id="unlockError" role="alert">Wrong password. Try again.</p>
+            <p class="login-hint">Protected viewer for your activity logs.</p>
+        </div>
+    </div>
+
     <div class="app-shell">
 
         <header class="topbar">
@@ -691,7 +886,7 @@ HTML_TEMPLATE = """
                 <div class="brand-icon">📡</div>
                 <div class="brand-text">
                     <h1>Cross<span>Watch</span></h1>
-                    <p>Network Viewer &middot; Real-time activity tracking &middot; Project 5</p>
+                    <p>Network Viewer &middot; Real-time activity tracking &middot; Project 6</p>
                 </div>
             </div>
             <div class="topbar__controls">
@@ -705,7 +900,8 @@ HTML_TEMPLATE = """
                     <span class="live-dot"></span>
                     <span>Connecting&hellip;</span>
                 </div>
-                <button class="btn-theme" id="darkModeBtn">☀️ Light Mode</button>
+                <button class="btn-logout" id="logoutBtn" type="button">Logout</button>
+                <button type="button" class="btn-theme theme-toggle-btn" id="darkModeBtn" aria-label="Toggle light or dark mode">☀️ Light Mode</button>
             </div>
         </header>
 
@@ -830,16 +1026,136 @@ HTML_TEMPLATE = """
         // CONFIGURATION
         // ============================================================
 
-        const urlParams       = new URLSearchParams(window.location.search);
-        const currentPassword = urlParams.get('password') || '';
-        const currentHost     = window.location.hostname;
-        const WS_PORT         = 8765;
+        const AUTH_TOKEN_KEY    = 'auth_token';
+        const AUTH_SESSION_KEY  = 'auth_token_session';
+        const REMEMBER_ME_KEY   = 'cw_remember_me';
+        const currentHost       = window.location.hostname;
+        const WS_PORT           = 8765;
+        const apiUrl            = '/api/logs';
+        const networkUrl        = '/api/network';
 
-        let apiUrl     = '/api/logs';
-        let networkUrl = '/api/network';
-        if (currentPassword) {
-            apiUrl     = `/api/logs?password=${currentPassword}`;
-            networkUrl = `/api/network?password=${currentPassword}`;
+        function getRememberPreference() {
+            return localStorage.getItem(REMEMBER_ME_KEY);
+        }
+
+        function getAuthToken() {
+            const pref = getRememberPreference();
+            if (pref === '1') {
+                return localStorage.getItem(AUTH_TOKEN_KEY) || '';
+            }
+            if (pref === '0') {
+                return sessionStorage.getItem(AUTH_SESSION_KEY) || '';
+            }
+            // Legacy / first visit: check both storages
+            return localStorage.getItem(AUTH_TOKEN_KEY)
+                || sessionStorage.getItem(AUTH_SESSION_KEY)
+                || '';
+        }
+
+        function saveAuthToken(token, rememberMe) {
+            clearAllAuth();
+            if (rememberMe) {
+                localStorage.setItem(AUTH_TOKEN_KEY, token);
+                localStorage.setItem(REMEMBER_ME_KEY, '1');
+            } else {
+                sessionStorage.setItem(AUTH_SESSION_KEY, token);
+                localStorage.setItem(REMEMBER_ME_KEY, '0');
+            }
+        }
+
+        function clearAllAuth() {
+            const localKeys = [AUTH_TOKEN_KEY, 'auth_password', 'auth_token'];
+            const sessionKeys = [AUTH_SESSION_KEY, 'auth_password_session', 'auth_password'];
+            localKeys.forEach(k => localStorage.removeItem(k));
+            sessionKeys.forEach(k => sessionStorage.removeItem(k));
+            // Keep cw_remember_me so the checkbox reflects the user's last choice
+        }
+
+        function isRememberMePreferred() {
+            return getRememberPreference() !== '0';
+        }
+
+        function persistRememberPreference(checked) {
+            localStorage.setItem(REMEMBER_ME_KEY, checked ? '1' : '0');
+        }
+
+        function authHeaders(extra = {}) {
+            return Object.assign({}, extra, { 'X-Token': getAuthToken() });
+        }
+
+        function authFetch(url, options = {}) {
+            const headers = authHeaders(options.headers || {});
+            return fetch(url, Object.assign({}, options, { headers }));
+        }
+
+        function showUnlockOverlay() {
+            document.body.classList.add('locked');
+            document.getElementById('unlockOverlay').classList.add('visible');
+            const rememberEl = document.getElementById('rememberMe');
+            if (rememberEl) rememberEl.checked = isRememberMePreferred();
+        }
+
+        function hideUnlockOverlay() {
+            document.body.classList.remove('locked');
+            document.getElementById('unlockOverlay').classList.remove('visible');
+            document.getElementById('unlockError').classList.remove('visible');
+        }
+
+        function handleAuthFailure() {
+            clearAllAuth();
+            showUnlockOverlay();
+        }
+
+        function stopDashboard() {
+            if (state.refreshIntervalId) {
+                clearInterval(state.refreshIntervalId);
+                state.refreshIntervalId = null;
+            }
+            if (wsReconnectTimer) {
+                clearTimeout(wsReconnectTimer);
+                wsReconnectTimer = null;
+            }
+            if (ws) {
+                ws.onclose = null;
+                ws.close();
+                ws = null;
+            }
+            setWsPill(false);
+        }
+
+        async function logout() {
+            const token = getAuthToken();
+            stopDashboard();
+            if (token) {
+                try {
+                    await fetch('/api/logout', {
+                        method: 'POST',
+                        headers: { 'X-Token': token },
+                    });
+                } catch (e) { /* still clear locally */ }
+            }
+            clearAllAuth();
+            const input = document.getElementById('passwordInput');
+            if (input) input.value = '';
+            showUnlockOverlay();
+        }
+
+        async function tryUnlock(password, rememberMe) {
+            const trimmed = (password || '').trim();
+            if (!trimmed) return false;
+            try {
+                const r = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: trimmed, remember: !!rememberMe }),
+                });
+                const data = await r.json().catch(() => ({}));
+                if (r.status === 401 || !r.ok || !data.token) return false;
+                saveAuthToken(data.token, rememberMe);
+                return true;
+            } catch (e) {
+                return false;
+            }
         }
 
         // ============================================================
@@ -856,6 +1172,9 @@ HTML_TEMPLATE = """
             wsCount:           0,        // live records received via WebSocket
             csvTotal:          0,        // full row count from activity_log.csv
             csvTotalKnown:     false,
+            csvUniqueApps:     0,        // unique apps from full CSV
+            csvUniqueKnown:    false,
+            knownAppNames:     new Set(),
         };
 
         // ============================================================
@@ -863,13 +1182,19 @@ HTML_TEMPLATE = """
         // ============================================================
 
         let ws = null;
+        let wsReconnectTimer = null;
 
         function connectWebSocket() {
-            const wsUrl = `ws://${currentHost}:${WS_PORT}`;
+            const token = getAuthToken();
+            if (!token) return;
+            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+
+            const wsUrl = `ws://${currentHost}:${WS_PORT}?token=${encodeURIComponent(token)}`;
 
             try { ws = new WebSocket(wsUrl); } catch(e) { return; }
 
             ws.onopen = () => {
+                if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
                 setWsPill(true);
             };
 
@@ -883,7 +1208,6 @@ HTML_TEMPLATE = """
                         state.allLogs = msg.history.map(normalise);
                         state.firstLoad = true;
                         applySearchFilter();
-                        updateStats(countUniqueApps(state.allLogs));
                     }
                 }
                 else if (msg.type === 'activity') {
@@ -897,7 +1221,8 @@ HTML_TEMPLATE = """
                     state.wsCount++;
                     document.getElementById('wsCount').textContent = state.wsCount;
                     if (state.csvTotalKnown) setCsvTotal(state.csvTotal + 1);
-                    updateStats(countUniqueApps(state.allLogs));
+                    noteNewApp(activity.app);
+                    updateLastUpdate();
 
                     // If no active search/filter, insert row at top of table directly
                     const searchTerm = (document.getElementById('searchInput')?.value || '').toLowerCase();
@@ -912,11 +1237,11 @@ HTML_TEMPLATE = """
                 }
             };
 
-            ws.onerror = () => setWsPill(false);
-
             ws.onclose = () => {
                 setWsPill(false);
-                setTimeout(connectWebSocket, 3000);
+                if (!getAuthToken()) return;
+                if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+                wsReconnectTimer = setTimeout(connectWebSocket, 3000);
             };
         }
 
@@ -928,8 +1253,31 @@ HTML_TEMPLATE = """
             return { timestamp: item.timestamp||'', counter: item.counter||'', app: item.app||'', window: item.window||'' };
         }
 
-        function countUniqueApps(logs) {
-            return new Set(logs.map(l => l.app).filter(Boolean)).size;
+        function setCsvUniqueApps(count) {
+            state.csvUniqueApps = count;
+            state.csvUniqueKnown = true;
+            document.getElementById('uniqueApps').textContent = state.csvUniqueApps.toLocaleString();
+        }
+
+        function noteNewApp(appName) {
+            const name = (appName || '').trim();
+            if (!name || state.knownAppNames.has(name)) return;
+            state.knownAppNames.add(name);
+            if (state.csvUniqueKnown) setCsvUniqueApps(state.csvUniqueApps + 1);
+        }
+
+        function syncKnownApps() {
+            return authFetch('/api/unique-apps')
+                .then(r => {
+                    if (r.status === 401) { handleAuthFailure(); throw new Error('Unauthorized'); }
+                    return r.json();
+                })
+                .then(data => {
+                    const apps = data.apps || [];
+                    state.knownAppNames = new Set(apps.map(a => a.name).filter(Boolean));
+                    setCsvUniqueApps(apps.length);
+                })
+                .catch(() => {});
         }
 
         function setWsPill(connected) {
@@ -976,8 +1324,11 @@ HTML_TEMPLATE = """
         // ============================================================
 
         function getNetworkInfo() {
-            fetch(networkUrl)
-                .then(r => r.json())
+            authFetch(networkUrl)
+                .then(r => {
+                    if (r.status === 401) { handleAuthFailure(); throw new Error('Unauthorized'); }
+                    return r.json();
+                })
                 .then(data => {
                     const badge = document.getElementById('networkBadge');
                     badge.innerHTML = data.ip
@@ -993,19 +1344,27 @@ HTML_TEMPLATE = """
                 url += (url.includes('?') ? '&' : '?') + `app=${encodeURIComponent(state.appFilter)}`;
             }
 
-            fetch(url)
-                .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+            authFetch(url)
+                .then(r => {
+                    if (r.status === 401) { handleAuthFailure(); throw new Error('Unauthorized'); }
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                })
                 .then(data => {
                     if (data.error) { showError(data.error); return; }
                     if (!data.logs || !data.logs.length) {
                         showEmptyState('No activity yet.', 'Run python logger.py to start recording.');
                         setCsvTotal(0);
-                        updateStats(0);
+                        setCsvUniqueApps(0);
+                        state.knownAppNames = new Set();
+                        updateLastUpdate();
                         return;
                     }
                     state.allLogs = data.logs;
                     setCsvTotal(data.total);
-                    updateStats(data.unique_apps);
+                    setCsvUniqueApps(data.unique_apps);
+                    syncKnownApps();
+                    updateLastUpdate();
                     applySearchFilter();
                 })
                 .catch(err => {
@@ -1024,8 +1383,7 @@ HTML_TEMPLATE = """
             document.getElementById('totalCount').textContent = state.csvTotal.toLocaleString();
         }
 
-        function updateStats(uniqueAppsCount) {
-            document.getElementById('uniqueApps').textContent = uniqueAppsCount;
+        function updateLastUpdate() {
             state.lastTimeStr = new Date().toLocaleTimeString();
             const el = document.getElementById('lastUpdate');
             if (state.autoRefresh) {
@@ -1143,18 +1501,22 @@ HTML_TEMPLATE = """
         // THEME — same as P4
         // ============================================================
 
+        function updateThemeButtons(isLight) {
+            document.querySelectorAll('.theme-toggle-btn').forEach(btn => {
+                btn.innerHTML = isLight ? '🌙 Dark Mode' : '☀️ Light Mode';
+            });
+        }
+
         function toggleDarkMode() {
             const isLight = document.body.classList.toggle('light-mode');
-            document.getElementById('darkModeBtn').innerHTML = isLight ? '🌙 Dark Mode' : '☀️ Light Mode';
+            updateThemeButtons(isLight);
             localStorage.setItem('cwTheme', isLight ? 'light' : 'dark');
         }
 
         function loadDarkModePreference() {
-            if (localStorage.getItem('cwTheme') === 'light') {
-                document.body.classList.add('light-mode');
-                const btn = document.getElementById('darkModeBtn');
-                if (btn) btn.innerHTML = '🌙 Dark Mode';
-            }
+            const isLight = localStorage.getItem('cwTheme') === 'light';
+            if (isLight) document.body.classList.add('light-mode');
+            updateThemeButtons(isLight);
         }
 
         // ============================================================
@@ -1178,11 +1540,11 @@ HTML_TEMPLATE = """
             document.getElementById('appsModalOverlay').classList.add('active');
             document.getElementById('appsModal').classList.add('active');
 
-            let url = '/api/unique-apps';
-            if (currentPassword) url += `?password=${currentPassword}`;
-
-            fetch(url)
-                .then(r => r.json())
+            authFetch('/api/unique-apps')
+                .then(r => {
+                    if (r.status === 401) { handleAuthFailure(); throw new Error('Unauthorized'); }
+                    return r.json();
+                })
                 .then(data => {
                     const sorted = data.apps || [];
                     document.getElementById('modalAppCount').textContent = sorted.length;
@@ -1270,7 +1632,9 @@ HTML_TEMPLATE = """
         function setupEventListeners() {
             document.getElementById('searchInput')?.addEventListener('input', applySearchFilter);
             document.getElementById('exportBtn')?.addEventListener('click', openExportModal);
-            document.getElementById('darkModeBtn')?.addEventListener('click', toggleDarkMode);
+            document.querySelectorAll('.theme-toggle-btn').forEach(btn => {
+                btn.addEventListener('click', toggleDarkMode);
+            });
             document.getElementById('uniqueAppsStat')?.addEventListener('click', openAppsModal);
             document.getElementById('appsModalOverlay')?.addEventListener('click', closeAppsModal);
             document.getElementById('appsModalClose')?.addEventListener('click', closeAppsModal);
@@ -1283,9 +1647,43 @@ HTML_TEMPLATE = """
             });
             document.getElementById('btnExportFull')?.addEventListener('click', () => {
                 closeExportModal();
-                let url = '/api/download-csv';
-                if (currentPassword) url += `?password=${currentPassword}`;
-                window.location.href = url;
+                authFetch('/api/download-csv')
+                    .then(r => {
+                        if (r.status === 401) { handleAuthFailure(); return null; }
+                        if (!r.ok) throw new Error('Download failed');
+                        return r.blob();
+                    })
+                    .then(blob => {
+                        if (!blob) return;
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = `crosswatch_full_logs_${Date.now()}.csv`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(a.href);
+                    })
+                    .catch(() => alert('Could not download full history.'));
+            });
+            document.getElementById('logoutBtn')?.addEventListener('click', logout);
+            document.getElementById('unlockBtn')?.addEventListener('click', async () => {
+                const input = document.getElementById('passwordInput');
+                const rememberMe = document.getElementById('rememberMe')?.checked ?? true;
+                const errEl = document.getElementById('unlockError');
+                errEl.classList.remove('visible');
+                const ok = await tryUnlock(input?.value || '', rememberMe);
+                if (ok) {
+                    hideUnlockOverlay();
+                    startDashboard();
+                } else {
+                    errEl.classList.add('visible');
+                }
+            });
+            document.getElementById('passwordInput')?.addEventListener('keydown', e => {
+                if (e.key === 'Enter') document.getElementById('unlockBtn')?.click();
+            });
+            document.getElementById('rememberMe')?.addEventListener('change', e => {
+                persistRememberPreference(e.target.checked);
             });
             document.getElementById('autoRefreshToggle')?.addEventListener('change', e => {
                 state.autoRefresh = e.target.checked;
@@ -1307,13 +1705,38 @@ HTML_TEMPLATE = """
         // INIT
         // ============================================================
 
-        window.addEventListener('DOMContentLoaded', () => {
-            loadDarkModePreference();
-            setupEventListeners();
+        function startDashboard() {
             getNetworkInfo();
             loadLogs();
             startAutoRefresh();
-            connectWebSocket();   // NEW: start live WebSocket connection
+            connectWebSocket();
+        }
+
+        window.addEventListener('DOMContentLoaded', async () => {
+            loadDarkModePreference();
+            setupEventListeners();
+            if (!getAuthToken()) {
+                showUnlockOverlay();
+                return;
+            }
+            try {
+                const r = await authFetch('/api/logs');
+                if (r.status === 401) {
+                    clearAllAuth();
+                    showUnlockOverlay();
+                    return;
+                }
+                hideUnlockOverlay();
+                startDashboard();
+            } catch (e) {
+                // Server stopped or unreachable — keep token; don't force re-login
+                if (getAuthToken()) {
+                    hideUnlockOverlay();
+                    startDashboard();
+                } else {
+                    showUnlockOverlay();
+                }
+            }
         });
     </script>
 
@@ -1322,17 +1745,113 @@ HTML_TEMPLATE = """
 """
 
 # ============================================
-# PASSWORD HELPERS
+# SESSION TOKEN AUTH (Project 6)
 # ============================================
 
-def extract_password_from_path(path):
-    parsed = urllib.parse.urlparse(path)
-    query_params = urllib.parse.parse_qs(parsed.query)
-    passwords = query_params.get('password', [])
-    return passwords[0] if passwords else None
+PUBLIC_PATHS = ('/', '/dashboard')
+AUTH_PUBLIC_API = ('/api/login',)
+
+def save_sessions_to_disk():
+    """Write active sessions so Remember Me survives server restarts."""
+    try:
+        with sessions_lock:
+            snapshot = dict(active_sessions)
+        with open(SESSIONS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(snapshot, f)
+    except Exception as e:
+        print(f"⚠️  Could not save sessions: {e}")
+
+def load_sessions_from_disk():
+    """Restore valid (non-expired) sessions when server starts."""
+    global active_sessions
+    if not os.path.exists(SESSIONS_FILE):
+        return
+    try:
+        with open(SESSIONS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return
+        now = time.time()
+        with sessions_lock:
+            active_sessions = {
+                token: float(expiry)
+                for token, expiry in data.items()
+                if float(expiry) > now
+            }
+        save_sessions_to_disk()
+        if active_sessions:
+            print(f"🔑 Restored {len(active_sessions)} saved session(s) from {SESSIONS_FILE}")
+    except Exception as e:
+        print(f"⚠️  Could not load sessions: {e}")
+        active_sessions = {}
+
+def create_session_token(remember_me=False):
+    token = secrets.token_urlsafe(32)
+    ttl = SESSION_TTL_REMEMBER if remember_me else SESSION_TTL_BROWSER
+    expiry = time.time() + ttl
+    with sessions_lock:
+        active_sessions[token] = expiry
+    save_sessions_to_disk()
+    return token, int(expiry)
+
+def revoke_session_token(token):
+    if not token:
+        return
+    with sessions_lock:
+        active_sessions.pop(token, None)
+    save_sessions_to_disk()
+
+def validate_session_token(token):
+    if not token:
+        return False
+    now = time.time()
+    with sessions_lock:
+        expiry = active_sessions.get(token)
+        if expiry is None:
+            return False
+        if now > expiry:
+            active_sessions.pop(token, None)
+            save_sessions_to_disk()
+            return False
+    return True
+
+def get_request_token(handler):
+    token = handler.headers.get(TOKEN_HEADER)
+    if validate_session_token(token):
+        return token
+    parsed = urllib.parse.urlparse(handler.path)
+    qs = urllib.parse.parse_qs(parsed.query)
+    token = qs.get('token', [None])[0]
+    if validate_session_token(token):
+        return token
+    return None
+
+def is_authorized(handler):
+    return get_request_token(handler) is not None
+
+def send_access_denied(handler, as_json=False):
+    handler.send_response(401)
+    if as_json:
+        handler.send_header('Content-type', 'application/json')
+        handler.send_header('Access-Control-Allow-Origin', '*')
+        handler.end_headers()
+        handler.wfile.write(json.dumps({'error': 'Access Denied'}).encode())
+        return
+    handler.send_header('Content-type', 'text/html; charset=utf-8')
+    handler.end_headers()
+    denied_html = """<!DOCTYPE html>
+<html><head><title>CrossWatch - Access Denied</title>
+<style>body{font-family:sans-serif;background:#080c14;color:#dce8f5;min-height:100vh;display:flex;align-items:center;justify-content:center;text-align:center;padding:20px;}
+.card{max-width:420px;background:#0d1320;border:1px solid #1e2d42;border-radius:12px;padding:36px;}
+h1{color:#ff5270;}</style></head>
+<body><div class="card">
+<h1>Access Denied</h1>
+<p>Missing or invalid session token. Sign in from the dashboard.</p>
+</div></body></html>"""
+    handler.wfile.write(denied_html.encode('utf-8'))
 
 # ============================================
-# HTTP SERVER HANDLER — same as P4 + kept all endpoints
+# HTTP SERVER HANDLER
 # ============================================
 
 class CrossWatchHandler(BaseHTTPRequestHandler):
@@ -1340,41 +1859,68 @@ class CrossWatchHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        if path == '/api/login':
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length).decode('utf-8'))
+                password = body.get('password', '')
+                remember = bool(body.get('remember', False))
+            except Exception:
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': 'Bad request'}).encode())
+                return
+
+            if password != SECRET_PASSWORD:
+                self.send_response(401)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'Invalid password'}).encode())
+                return
+
+            token, expiry = create_session_token(remember)
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'success': True,
+                'token': token,
+                'expires': expiry,
+            }).encode())
+            return
+
+        if path == '/api/logout':
+            token = self.headers.get(TOKEN_HEADER)
+            revoke_session_token(token)
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': True}).encode())
+            return
+
+        if path.startswith('/api/'):
+            send_access_denied(self, as_json=True)
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
     def do_GET(self):
         parsed       = urllib.parse.urlparse(self.path)
         path         = parsed.path
         query_params = urllib.parse.parse_qs(parsed.query)
-        pw_from_url  = query_params.get('password', [None])[0]
 
-        # Auth check (bypass for /api/network)
-        if path != '/api/network':
-            client_ip  = self.client_address[0]
-            authorized = (client_ip in ('127.0.0.1', 'localhost')) or (pw_from_url == SECRET_PASSWORD)
-
-            if not authorized:
-                self.send_response(401)
-                self.send_header('Content-type', 'text/html; charset=utf-8')
-                self.end_headers()
-                host = self.headers.get('Host', 'IP_ADDRESS')
-                error_html = f"""<!DOCTYPE html>
-<html><head><title>CrossWatch — Access Denied</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
-<style>
-body{{font-family:'Plus Jakarta Sans',sans-serif;background:#080c14;color:#dce8f5;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;margin:0;}}
-.card{{max-width:480px;width:100%;background:#0d1320;border:1px solid #1e2d42;border-top:3px solid #ff5270;border-radius:12px;padding:40px 36px;text-align:center;}}
-h1{{font-size:22px;font-weight:800;color:#ff5270;margin:18px 0 10px;}}
-p{{color:#6e8caa;font-size:13.5px;line-height:1.6;margin-bottom:10px;}}
-code{{display:block;background:#111926;border:1px solid #1e2d42;border-radius:6px;padding:12px 16px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#00c2ff;word-break:break-all;margin:20px 0;text-align:left;}}
-small{{color:#334d68;font-size:11px;font-family:'JetBrains Mono',monospace;}}
-</style></head>
-<body><div class="card"><div style="font-size:40px;">🔒</div>
-<h1>Access Denied</h1>
-<p>This dashboard is password protected. Add your password to the URL:</p>
-<code>http://{host}/?password={SECRET_PASSWORD}</code>
-<small>Accessing from the same computer does not require a password.</small>
-</div></body></html>"""
-                self.wfile.write(error_html.encode('utf-8'))
+        # Project 6: require valid session token on every API request (except login)
+        if path.startswith('/api/') and path not in AUTH_PUBLIC_API:
+            if not is_authorized(self):
+                send_access_denied(self, as_json=True)
                 return
 
         # /api/network
@@ -1387,7 +1933,7 @@ small{{color:#334d68;font-size:11px;font-family:'JetBrains Mono',monospace;}}
             self.wfile.write(json.dumps({
                 'ip': local_ip, 'port': PORT,
                 'ws_port': WEBSOCKET_PORT,
-                'message': f'Access from http://{local_ip}:{PORT}/?password={SECRET_PASSWORD}'
+                'message': f'Access from http://{local_ip}:{PORT}/ (unlock with your password)'
             }, indent=2).encode())
 
         # Main dashboard
@@ -1490,6 +2036,7 @@ def run_server():
 
     local_ip = get_local_ip()
 
+    load_sessions_from_disk()
     start_csv_watcher()
     start_websocket_server_thread()
     time.sleep(0.5)  # Let WS loop initialise before printing
@@ -1497,13 +2044,16 @@ def run_server():
     httpd = HTTPServer((SERVER_HOST, PORT), CrossWatchHandler)
 
     print("=" * 65)
-    print("🌐 CrossWatch Network Viewer — PROJECT 5 (Live + P4 features)")
+    print("🌐 CrossWatch Network Viewer — PROJECT 6 (Basic Security)")
     print("=" * 65)
     print(f"\n📍 HTTP Dashboard  : http://localhost:{PORT}")
-    print(f"📍 Network URL     : http://{local_ip}:{PORT}/?password={SECRET_PASSWORD}")
-    print(f"\n🔌 WebSocket       : ws://{local_ip}:{WEBSOCKET_PORT}")
-    print(f"\n🔒 Password        : {SECRET_PASSWORD}")
+    print(f"📍 Network URL     : http://{local_ip}:{PORT}/")
+    print(f"\n🔌 WebSocket       : ws://{local_ip}:{WEBSOCKET_PORT}?token=<session-token>")
+    print(f"\n🔒 Password        : {SECRET_PASSWORD}  (used once at login)")
+    print("   Remember-me sessions saved to sessions.json (survive server restart).")
     print("\n✨ FEATURES:")
+    print("   🔐 Random session token (X-Token) after password login")
+    print("   🚪 Logout revokes token on this device")
     print("   ⚡ Real-time WebSocket live rows (green flash on new entry)")
     print("   📊 Unique Apps modal with per-app filter")
     print("   ↓  Export CSV (current view or full history)")
