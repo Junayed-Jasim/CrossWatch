@@ -264,6 +264,16 @@ If something doesn't work:
 ---
 
 
+### 🤝 Contributing
+This is a personal learning project. Feel free to fork and experiment!
+
+### 📄 License
+Educational project - feel free to use and modify.
+
+
+---
+
+
 #### Made with Python 🐍
 
 *Start tracking your computer activity in under 2 minutes!*
