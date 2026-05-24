@@ -93,7 +93,7 @@ Once logged in, you'll see:
 
 - 📱 **Phone view** - Access from other devices on your WiFi
 
--⚡ **Live updates** - New activities appear instantly with a green flash
+- ⚡ **Live updates** - New activities appear instantly with a green flash
 
 ---
 
@@ -112,11 +112,14 @@ When you run `server.py`, it shows your network address:
 #### "The dashboard shows no data"
 **Solution:** Make sure `logger.py` is running in a separate terminal window.
 
+
 #### "Can't login"
 **Solution:** Password is `crosswatch123` (all lowercase, no spaces)
 
+
 #### "Port 8000 is already in use"
 **Solution:** Change the port in `server.py` (line 31: `PORT = 8000` change to `PORT = 8080`)
+
 
 #### "Module not found errors"
 **Solution:** Run the install command again:
@@ -124,6 +127,7 @@ When you run `server.py`, it shows your network address:
 ```bash
 pip install psutil pywin32 websockets
 ```
+
 
 ### "How do I stop everything?"
 - Stop logger: Press `CTRL + C` in the logger terminal
