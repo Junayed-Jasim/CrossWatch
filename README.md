@@ -31,183 +31,235 @@ Open Command Prompt or Terminal and run:
 
 ```bash
 pip install psutil pywin32 websockets
-Step 2: Start the Tracker
-bash
+```
+
+### Step 2: Start the Tracker
+```bash
 python logger.py
-What happens?
+```
+**What happens?**
 
-It will ask if you want to keep old data or start fresh
+- It will ask if you want to keep old data or start fresh
 
-Then it starts tracking your computer activity
+- Then it starts tracking your computer activity
 
-Press CTRL+C to stop tracking
+- **Press `CTRL+C` to stop tracking**
 
-Step 3: Open the Dashboard (in a NEW terminal window)
-bash
+### Step 3: Open the Dashboard (in a NEW terminal window)
+```bash
 python server.py
+```
 Then open your web browser and go to: http://localhost:8000
 
-Login password: crosswatch123
+**Login password:** `crosswatch123`
 
-🎮 How to Use
-The Tracker (logger.py)
-text
+---
+
+## 🎮 How to Use
+**The Tracker (`logger.py`)**
+```text
 ┌─────────────────────────────────────────────────┐
 │  🎯 CrossWatch Logger Started!                  │
-│  =========================================       │
-│  📋 Found existing activity_log.csv file!       │
+│  =========================================      |
+│  📋 Found existing activity_log.csv file!       |
 │                                                 │
-│  What would you like to do?                    │
+│  What would you like to do?                     │
 │     1 - Keep existing data (add new data to it) │
 │     2 - Delete old data (start completely fresh)│
-│     3 - Cancel (don't run logger)              │
+│     3 - Cancel (don't run logger)               │
 └─────────────────────────────────────────────────┘
-Pro tip: Choose option 1 most of the time to keep your history!
+```
+**Pro tip:** Choose option 1 most of the time to keep your history!
 
-The Dashboard
+
+### The Dashboard
 Once logged in, you'll see:
 
-Section	What it shows
-Top bar	Live connection status, Dark/Light mode toggle, Logout button
-Statistics	Total activities, Unique apps, Live counter, Last update time
-Search box	Type to filter by app name or window title
-Table	Your activity history (updates in real-time)
-Export button	Download your data as CSV file
-Cool Things You Can Do
-🔍 Search - Find specific apps or windows
+| Section |	What it shows |
+|-----------|------------------------------|
+| Top bar	| Live connection status, Dark/Light mode toggle, Logout button |
+| Statistics	| Total activities, Unique apps, Live counter, Last update time |
+| Search box	| Type to filter by app name or window title |
+| Table |	Your activity history (updates in real-time) |
+| Export | button	Download your data as CSV file |
 
-🎨 Dark mode - Click the sun/moon button
 
-📥 Export - Save your data to Excel/CSV
+### Cool Things You Can Do
+- 🔍 **Search** - Find specific apps or windows
 
-📱 Phone view - Access from other devices on your WiFi
+- 🎨 **Dark mode** - Click the sun/moon button
 
-⚡ Live updates - New activities appear instantly with a green flash
+- 📥 **Export** - Save your data to Excel/CSV
 
-📱 Access From Your Phone (Same WiFi)
-When you run server.py, it shows your network address:
+- 📱 **Phone view** - Access from other devices on your WiFi
 
-text
+-⚡ **Live updates** - New activities appear instantly with a green flash
+
+---
+
+## 📱 Access From Your Phone (Same WiFi)
+When you run `server.py`, it shows your network address:
+
+```text
 📍 Network URL     : http://192.168.1.100:8000/
-Type that address into your phone's browser - same login password works!
+```
+#### Type that address into your phone's browser - same login password works!
 
-❓ Common Questions
-"The dashboard shows no data"
-Solution: Make sure logger.py is running in a separate terminal window.
+---
 
-"Can't login"
-Solution: Password is crosswatch123 (all lowercase, no spaces)
+### ❓ Common Questions
 
-"Port 8000 is already in use"
-Solution: Change the port in server.py (line 31: PORT = 8000 change to PORT = 8080)
+#### "The dashboard shows no data"
+**Solution:** Make sure `logger.py` is running in a separate terminal window.
 
-"Module not found errors"
-Solution: Run the install command again:
+#### "Can't login"
+**Solution:** Password is `crosswatch123` (all lowercase, no spaces)
 
-bash
+#### "Port 8000 is already in use"
+**Solution:** Change the port in `server.py` (line 31: `PORT = 8000` change to `PORT = 8080`)
+
+#### "Module not found errors"
+**Solution:** Run the install command again:
+
+```bash
 pip install psutil pywin32 websockets
-"How do I stop everything?"
-Stop logger: Press CTRL + C in the logger terminal
+```
 
-Stop server: Press CTRL + C in the server terminal
+### "How do I stop everything?"
+- Stop logger: Press `CTRL + C` in the logger terminal
 
-📊 What Your Data Looks Like
-The CSV file (activity_log.csv) saves rows like this:
+- Stop server: Press `CTRL + C` in the server terminal
 
-text
-Timestamp                    | Counter | Application    | Window Title
+---
+
+### 📊 What Your Data Looks Like
+The CSV file (`activity_log.csv`) saves rows like this:
+
+```text
+Timestamp                   | Counter | Application    | Window Title
 2026-05-20 19:02:11.387739  | 1       | Cursor.exe     | server.py - CrossWatch
 2026-05-20 19:02:16.464394  | 2       | msedge.exe     | CrossWatch Dashboard
+```
 You can open this file in Excel, Google Sheets, or any text editor.
 
-🔧 Troubleshooting Quick Guide
-Problem	Quick Fix
-"No module named 'win32gui'"	Run: pip install pywin32
-"No module named 'websockets'"	Run: pip install websockets
-Dashboard won't load	Make sure server.py is running
-No data showing	Make sure logger.py is running
-Can't connect from phone	Both devices on same WiFi? Check firewall
-Login fails	Password is crosswatch123
-🎯 What Each File Does (Simple Explanation)
-logger.py - The Camera
-Runs in background
+---
 
-Checks what window you're using every 5 seconds
+### 🔧 Troubleshooting Quick Guide
+|Problem|	Quick Fix|
+|---------------|----------|
+"No module named 'win32gui'" |	Run: `pip install pywin32`
+"No module named 'websockets'"|	Run: `pip install websockets`
+Dashboard won't load |	Make sure `server.py` is running
+No data showing |	Make sure `logger.py` is running
+Can't connect from phone |	Both devices on same WiFi? Check firewall
+Login fails |	Password is `crosswatch123`
 
-Saves to CSV file
+---
 
-Press CTRL+C to stop
+### 🎯 What Each File Does (Simple Explanation)
 
-server.py - The TV Screen
+#### `logger.py` - The Camera
+- Runs in background
+
+- Checks what window you're using every 5 seconds
+
+- Saves to CSV file
+
+- Press `CTRL+C` to stop
+
+
+
+### `server.py` - The TV Screen
 Creates a website showing your data
 
-Updates in real-time
+- Updates in real-time
 
-Has password protection
+- Has password protection
 
-Run this, then open browser
+- Run this, then open browser
 
-activity_log.csv - The Memory Card
-Stores all your activity data
 
-Can open with Excel
 
-Delete this file to start fresh
+#### `activity_log.csv` - The Memory Card
+- Stores all your activity data
 
-sessions.json - The Key Ring
-Remembers your login
+- Can open with Excel
 
-Auto-created, don't touch it
+- Delete this file to start fresh
 
-💡 Pro Tips
-Run logger first, then server - Always start logger before opening the dashboard
 
-Keep both running - You need both windows open for full functionality
 
-Bookmark the dashboard - http://localhost:8000 is easy to remember
+#### `sessions.json` - The Key Ring
+- Remembers your login
 
-Export before closing - If you want to save your data, use the export button
+- Auto-created, don't touch it
 
-Use Dark Mode - Easier on the eyes, click the button in top-right
+---
 
-🚪 Stopping Everything
-text
+### 💡 Pro Tips
+1. **Run logger first, then server** - Always start logger before opening the dashboard
+
+2. **Keep both running** - You need both windows open for full functionality
+
+3. **Bookmark the dashboard** - http://localhost:8000 is easy to remember
+
+4. **Export before closing** - If you want to save your data, use the export button
+
+5. **Use Dark Mode** - Easier on the eyes, click the button in top-right
+
+
+---
+
+
+### 🚪 Stopping Everything
+```text
 Terminal 1 (Logger):        Terminal 2 (Server):
 Press CTRL + C              Press CTRL + C
+```
 That's it! Both programs will save data and exit cleanly.
 
-📞 Need Help?
+---
+
+### 📞 Need Help?
 If something doesn't work:
 
-Check both terminals are running
+1. Check both terminals are running
 
-Make sure you installed all packages
+2. Make sure you installed all packages
 
-Try restarting both programs
+3. Try restarting both programs
 
-Check the password is crosswatch123
+4. Check the password is `crosswatch123`
 
-✨ Features at a Glance
-✅ Tracks active apps every 5 seconds
 
-✅ Shows window titles
+---
 
-✅ Beautiful dashboard
 
-✅ Real-time updates
+### ✨ Features at a Glance
+- ✅ Tracks active apps every 5 seconds
 
-✅ Search and filter
+- ✅ Shows window titles
 
-✅ Export to CSV
+- ✅ Beautiful dashboard
 
-✅ Dark/Light mode
+- ✅ Real-time updates
 
-✅ Password protected
+- ✅ Search and filter
 
-✅ Works on phone (same WiFi)
+- ✅ Export to CSV
 
-✅ Saves your login session
+- ✅ Dark/Light mode
 
-Made with Python 🐍
+- ✅ Password protected
 
-Start tracking your computer activity in under 2 minutes!
+- ✅ Works on phone (same WiFi)
+
+- ✅ Saves your login session
+
+
+---
+
+
+#### Made with Python 🐍
+
+*Start tracking your computer activity in under 2 minutes!*
