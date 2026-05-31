@@ -28,14 +28,18 @@ except ImportError:
 # CONFIGURATION
 # ============================================
 
-SECRET_PASSWORD = "crosswatch123"  # Only you should know this
+SECRET_PASSWORD = "crosswatch123"
 TOKEN_HEADER = "X-Token"
-SESSION_TTL_REMEMBER = 30 * 24 * 3600   # 30 days when "remember me" is checked
-SESSION_TTL_BROWSER = 12 * 3600         # 12 hours for session-only login
-SESSIONS_FILE = 'sessions.json'         # Persist tokens across server restarts
+SESSION_TTL_REMEMBER = 30 * 24 * 3600
+SESSION_TTL_BROWSER = 12 * 3600
+SESSIONS_FILE = 'sessions.json'
 PORT = 8000
 SERVER_HOST = '0.0.0.0'
 WEBSOCKET_PORT = 8765
+
+# Pairing config
+PAIRED_DEVICES_FILE = 'paired_devices.json'
+PAIR_AUDIT_FILE     = 'pair_audit.jsonl'
 
 # ============================================
 # GLOBAL STATE FOR WEBSOCKET
@@ -49,6 +53,11 @@ ws_event_loop = None  # Saved so the CSV watcher thread can post onto it
 # Active login sessions: random token -> expiry (unix timestamp)
 active_sessions = {}
 sessions_lock = threading.Lock()
+
+# Pairing state
+pending_pairs  = {}
+paired_devices = {}
+pair_lock      = threading.Lock()
 
 # ============================================
 # HELPER: Get Local IP
@@ -850,6 +859,64 @@ HTML_TEMPLATE = """
             cursor: pointer;
             transition: border-color var(--transition), color var(--transition), background var(--transition);
         }
+
+        .btn-pair {
+            padding: 7px 15px;
+            background: var(--surface-raised);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--accent);
+            font-family: var(--font-ui); font-size: 12px; font-weight: 600;
+            cursor: pointer;
+            transition: border-color var(--transition), color var(--transition), background var(--transition);
+        }
+        .btn-pair:hover { border-color: var(--accent); background: var(--accent-dim); }
+
+        .qr-modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+            z-index: 900; opacity: 0; visibility: hidden;
+            transition: opacity 0.25s ease, visibility 0.25s ease;
+        }
+        .qr-modal-overlay.active { opacity: 1; visibility: visible; }
+
+        .qr-modal {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%) scale(0.95);
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); width: 340px; max-width: 92vw;
+            padding: 28px 24px; text-align: center;
+            z-index: 950; opacity: 0; visibility: hidden;
+            transition: opacity 0.25s ease, visibility 0.25s ease, transform 0.25s ease;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+        }
+        .qr-modal.active { opacity: 1; visibility: visible; transform: translate(-50%, -50%) scale(1); }
+        .qr-modal h2 { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+        .qr-modal p  { font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; }
+        .qr-modal img { width: 200px; height: 200px; border-radius: 8px; background: #fff; padding: 8px; }
+        .qr-countdown { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+        .qr-status { margin-top: 12px; font-size: 13px; font-weight: 600; min-height: 20px; }
+        .qr-status.ok  { color: var(--green); }
+        .qr-status.err { color: var(--danger); }
+
+        .confirm-modal {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%) scale(0.95);
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius-lg); width: 360px; max-width: 92vw;
+            padding: 28px 24px; text-align: center;
+            z-index: 960; opacity: 0; visibility: hidden;
+            transition: opacity 0.25s ease, visibility 0.25s ease, transform 0.25s ease;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+        }
+        .confirm-modal.active { opacity: 1; visibility: visible; transform: translate(-50%, -50%) scale(1); }
+        .confirm-modal h2 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .confirm-modal p  { font-size: 13px; color: var(--text-secondary); margin-bottom: 20px; }
+.confirm-btns { display: flex; gap: 10px; }
+.confirm-btns button { flex: 1; padding: 11px; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.btn-approve { background: var(--green); color: #041a10; }
+.btn-deny-confirm { background: var(--surface-raised); border: 1px solid var(--border) !important; color: var(--danger); }
+
         .btn-logout:hover { border-color: #ff5270; color: #ff5270; background: rgba(255, 82, 112, 0.08); }
     </style>
 </head>
@@ -901,8 +968,9 @@ HTML_TEMPLATE = """
                     <span class="live-dot"></span>
                     <span>Connecting&hellip;</span>
                 </div>
-                <button class="btn-logout" id="logoutBtn" type="button">Logout</button>
+                <button class="btn-pair" id="pairBtn" type="button">📱 Pair Device</button>
                 <button type="button" class="btn-theme theme-toggle-btn" id="darkModeBtn" aria-label="Toggle light or dark mode">☀️ Light Mode</button>
+                <button class="btn-logout" id="logoutBtn" type="button">Logout</button>
             </div>
         </header>
 
@@ -987,6 +1055,28 @@ HTML_TEMPLATE = """
     </div>
 
     <!-- Apps Modal — UNCHANGED from P4 -->
+    <!-- QR Pairing Modal -->
+    <div class="qr-modal-overlay" id="qrModalOverlay"></div>
+    <div class="qr-modal" id="qrModal">
+        <h2>Pair a Device</h2>
+        <p>Scan this QR code from the device you want to pair</p>
+        <img id="qrImage" src="" alt="QR Code">
+        <div class="qr-countdown" id="qrCountdown">Expires in 5:00</div>
+        <div class="qr-status" id="qrStatus"></div>
+        <button class="apps-modal__close" id="qrModalClose" style="margin-top:16px;width:100%;padding:9px;">&times; Close</button>
+    </div>
+
+    <!-- Confirm Pairing Modal -->
+    <div class="qr-modal-overlay" id="confirmModalOverlay"></div>
+    <div class="confirm-modal" id="confirmModal">
+        <h2>📱 Pairing Request</h2>
+        <p id="confirmMsg">A device wants to pair with this dashboard.</p>
+        <div class="confirm-btns">
+            <button class="btn-approve" id="btnApprove">Approve</button>
+            <button class="btn-deny-confirm" id="btnDeny">Deny</button>
+        </div>
+    </div>
+
     <div class="apps-modal-overlay" id="appsModalOverlay"></div>
     <div class="apps-modal" id="appsModal">
         <div class="apps-modal__header">
@@ -1698,9 +1788,132 @@ HTML_TEMPLATE = """
                 }
             });
             document.addEventListener('keydown', e => {
-                if (e.key === 'Escape') { closeAppsModal(); closeExportModal(); }
+                if (e.key === 'Escape') { closeAppsModal(); closeExportModal(); closeQrModal(); closeConfirmModal(); }
             });
+
+            //pairing listeners
+            document.getElementById('pairBtn')?.addEventListener('click', initiatePairing);
+            document.getElementById('qrModalClose')?.addEventListener('click', closeQrModal);
+            document.getElementById('qrModalOverlay')?.addEventListener('click', closeQrModal);
+            document.getElementById('btnApprove')?.addEventListener('click', () => respondToPair(true));
+            document.getElementById('btnDeny')?.addEventListener('click', () => respondToPair(false));
         }
+
+        // ============================================================
+        // PAIRING
+        // ============================================================
+
+        let pairToken        = null;
+        let pairCountdownIv  = null;
+        let pairPollIv       = null;
+        let pendingPairToken = null;
+
+        function openQrModal() {
+            document.getElementById('qrModalOverlay').classList.add('active');
+            document.getElementById('qrModal').classList.add('active');
+        }
+
+        function closeQrModal() {
+            document.getElementById('qrModalOverlay').classList.remove('active');
+            document.getElementById('qrModal').classList.remove('active');
+            if (pairCountdownIv) { clearInterval(pairCountdownIv); pairCountdownIv = null; }
+            if (pairPollIv)      { clearInterval(pairPollIv);      pairPollIv = null; }
+            pairToken = null;
+        }
+
+        function closeConfirmModal() {
+            document.getElementById('confirmModalOverlay').classList.remove('active');
+            document.getElementById('confirmModal').classList.remove('active');
+            pendingPairToken = null;
+        }
+
+        async function initiatePairing() {
+            const statusEl = document.getElementById('qrStatus');
+            const imgEl    = document.getElementById('qrImage');
+            statusEl.textContent = '';
+            statusEl.className   = 'qr-status';
+            imgEl.src = '';
+            openQrModal();
+
+            try {
+                const r = await authFetch('/api/pair/init');
+                if (r.status === 401) { handleAuthFailure(); return; }
+                const d = await r.json();
+                pairToken = d.token;
+                imgEl.src = 'data:image/png;base64,' + d.qr_b64;
+                startCountdown(d.expires_in || 300);
+                startPairPoll();
+            } catch(e) {
+                statusEl.className   = 'qr-status err';
+                statusEl.textContent = 'Could not generate QR. Is server running?';
+            }
+        }
+
+        function startCountdown(seconds) {
+            let remaining = seconds;
+            const el = document.getElementById('qrCountdown');
+            if (pairCountdownIv) clearInterval(pairCountdownIv);
+            pairCountdownIv = setInterval(() => {
+                remaining--;
+                const m = Math.floor(remaining / 60);
+                const s = remaining % 60;
+                el.textContent = `Expires in ${m}:${String(s).padStart(2,'0')}`;
+                if (remaining <= 0) {
+                    clearInterval(pairCountdownIv);
+                    el.textContent = 'Expired';
+                    if (pairPollIv) { clearInterval(pairPollIv); pairPollIv = null; }
+                    document.getElementById('qrStatus').className   = 'qr-status err';
+                    document.getElementById('qrStatus').textContent = 'QR expired. Close and try again.';
+                }
+            }, 1000);
+        }
+
+        function startPairPoll() {
+            if (pairPollIv) clearInterval(pairPollIv);
+            pairPollIv = setInterval(async () => {
+                if (!pairToken) return;
+                try {
+                    const r = await fetch('/api/pair/status?token=' + pairToken);
+                    const d = await r.json();
+                    const st = document.getElementById('qrStatus');
+                    if (d.status === 'scanned') {
+                        st.className   = 'qr-status ok';
+                        st.textContent = 'Device scanned! Waiting for your confirmation…';
+                        clearInterval(pairPollIv);
+                        showConfirmModal(pairToken);
+                    } else if (d.status === 'approved') {
+                        st.className   = 'qr-status ok';
+                        st.textContent = 'Paired successfully!';
+                        clearInterval(pairPollIv);
+                    } else if (d.status === 'expired') {
+                        st.className   = 'qr-status err';
+                        st.textContent = 'QR expired.';
+                        clearInterval(pairPollIv);
+                    }
+                } catch(e) {}
+            }, 2000);
+        }
+
+        function showConfirmModal(token) {
+            pendingPairToken = token;
+            document.getElementById('confirmModalOverlay').classList.add('active');
+            document.getElementById('confirmModal').classList.add('active');
+        }
+
+        async function respondToPair(approved) {
+            if (!pendingPairToken) return;
+            try {
+                await authFetch('/api/pair/confirm', {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify({ token: pendingPairToken, approved }),
+                });
+            } catch(e) {}
+            closeConfirmModal();
+    const st = document.getElementById('qrStatus');
+    st.className   = approved ? 'qr-status ok'  : 'qr-status err';
+    st.textContent = approved ? 'Device paired!' : 'Pairing denied.';
+}
 
         // ============================================================
         // INIT
@@ -1746,11 +1959,11 @@ HTML_TEMPLATE = """
 """
 
 # ============================================
-# SESSION TOKEN AUTH (Project 6)
+# SESSION TOKEN AUTH
 # ============================================
 
 PUBLIC_PATHS = ('/', '/dashboard')
-AUTH_PUBLIC_API = ('/api/login',)
+AUTH_PUBLIC_API = ('/api/login', '/api/pair/complete', '/api/pair/status')
 
 def save_sessions_to_disk():
     """Write active sessions so Remember Me survives server restarts."""
@@ -1761,6 +1974,134 @@ def save_sessions_to_disk():
             json.dump(snapshot, f)
     except Exception as e:
         print(f"⚠️  Could not save sessions: {e}")
+
+def load_paired_devices():
+    global paired_devices
+    if not os.path.exists(PAIRED_DEVICES_FILE):
+        return
+    try:
+        with open(PAIRED_DEVICES_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            with pair_lock:
+                paired_devices = data
+        print(f"🔗 Loaded {len(paired_devices)} paired device(s)")
+    except Exception as e:
+        print(f"⚠️  Could not load paired devices: {e}")
+
+def save_paired_devices():
+    try:
+        with pair_lock:
+            snapshot = dict(paired_devices)
+        with open(PAIRED_DEVICES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(snapshot, f, indent=2)
+    except Exception as e:
+        print(f"⚠️  Could not save paired devices: {e}")
+
+def write_pair_audit(event, data):
+    try:
+        entry = {
+            'time':  time.strftime('%Y-%m-%dT%H:%M:%S'),
+            'event': event,
+        }
+        entry.update(data)
+        with open(PAIR_AUDIT_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entry) + '\n')
+    except Exception as e:
+        print(f"⚠️  Could not write pair audit: {e}")
+
+def generate_pair_token(device_id):
+    token = secrets.token_urlsafe(32)
+    expires_at = time.time() + 300  # 5 minutes
+    with pair_lock:
+        pending_pairs[token] = {
+            'device_id':  device_id,
+            'expires_at': expires_at,
+            'used':       False,
+            'confirmed':  None,  # None=pending, True=approved, False=denied
+        }
+    write_pair_audit('pair_init', {'device_id': device_id, 'token': token[:8] + '…'})
+
+    import qrcode, io as _io
+    payload = f"http://{get_local_ip()}:{PORT}/pair?token={token}&device_id=mobile"
+    qr = qrcode.make(payload)
+    buf = _io.BytesIO()
+    qr.save(buf, format='PNG')
+    qr_bytes = buf.getvalue()
+
+    import base64
+    qr_b64 = base64.b64encode(qr_bytes).decode('utf-8')
+    return token, qr_b64
+
+def consume_pairing(token, device_id, ip):
+    now = time.time()
+    with pair_lock:
+        entry = pending_pairs.get(token)
+        if entry is None:
+            return False, 'invalid_token'
+        if entry['used']:
+            return False, 'already_used'
+        if now > entry['expires_at']:
+            return False, 'expired'
+        entry['used']      = True
+        entry['scanner_device_id'] = device_id
+        entry['scanner_ip']        = ip
+        entry['confirmed'] = None  # waiting for owner to confirm
+    write_pair_audit('pair_scan', {
+        'token':     token[:8] + '…',
+        'device_id': device_id,
+        'ip':        ip,
+    })
+    return True, 'pending_confirmation'
+
+def confirm_pairing(token, approved, ip):
+    with pair_lock:
+        entry = pending_pairs.get(token)
+        if entry is None:
+            return False, 'invalid_token'
+        if not entry['used']:
+            return False, 'not_scanned_yet'
+        entry['confirmed'] = approved
+
+    scanner_id = entry.get('scanner_device_id', 'unknown')
+    owner_id   = entry.get('device_id', 'unknown')
+
+    if approved:
+        with pair_lock:
+            paired_devices[scanner_id] = {
+                'paired_with': owner_id,
+                'paired_at':   time.strftime('%Y-%m-%dT%H:%M:%S'),
+                'ip':          ip,
+            }
+        save_paired_devices()
+        write_pair_audit('pair_approved', {
+            'token':      token[:8] + '…',
+            'scanner_id': scanner_id,
+            'owner_id':   owner_id,
+            'ip':         ip,
+        })
+    else:
+        write_pair_audit('pair_denied', {
+            'token':      token[:8] + '…',
+            'scanner_id': scanner_id,
+            'ip':         ip,
+        })
+
+    return True, 'approved' if approved else 'denied'
+
+
+def get_pair_status(token):
+    with pair_lock:
+        entry = pending_pairs.get(token)
+    if entry is None:
+        return 'invalid'
+    if time.time() > entry['expires_at']:
+        return 'expired'
+    if not entry['used']:
+        return 'pending'
+    if entry['confirmed'] is None:
+        return 'scanned'
+    return 'approved' if entry['confirmed'] else 'denied'
 
 def load_sessions_from_disk():
     """Restore valid (non-expired) sessions when server starts."""
@@ -1906,6 +2247,53 @@ class CrossWatchHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'success': True}).encode())
             return
 
+        if path == '/api/pair/complete':
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length).decode('utf-8'))
+                token     = body.get('token', '')
+                device_id = body.get('device_id', 'unknown')
+                ip        = self.client_address[0]
+            except Exception:
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': 'Bad request'}).encode())
+                return
+
+            ok, reason = consume_pairing(token, device_id, ip)
+            self.send_response(200 if ok else 400)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'ok': ok, 'reason': reason}).encode())
+            return
+
+        if path == '/api/pair/confirm':
+            if not is_authorized(self):
+                send_access_denied(self, as_json=True)
+                return
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(length).decode('utf-8'))
+                token    = body.get('token', '')
+                approved = bool(body.get('approved', False))
+                ip       = self.client_address[0]
+            except Exception:
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': 'Bad request'}).encode())
+                return
+
+            ok, reason = confirm_pairing(token, approved, ip)
+            self.send_response(200 if ok else 400)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'ok': ok, 'reason': reason}).encode())
+            return
+
         if path.startswith('/api/'):
             send_access_denied(self, as_json=True)
             return
@@ -2019,6 +2407,129 @@ class CrossWatchHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self.send_response(500); self.end_headers(); self.wfile.write(str(e).encode())
 
+        elif path == '/api/pair/init':
+            if not is_authorized(self):
+                send_access_denied(self, as_json=True)
+                return
+            device_id = query_params.get('device_id', ['desktop'])[0]
+            token, qr_b64 = generate_pair_token(device_id)
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'token':  token,
+                'qr_b64': qr_b64,
+                'expires_in': 300,
+            }).encode())
+
+        elif path == '/api/pair/status':
+            token = query_params.get('token', [None])[0]
+            status = get_pair_status(token) if token else 'invalid'
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'status': status}).encode())
+
+        elif path == '/api/paired-devices':
+            if not is_authorized(self):
+                send_access_denied(self, as_json=True)
+                return
+            with pair_lock:
+                devices = dict(paired_devices)
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'devices': devices}).encode())
+
+        elif path == '/pair':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            token  = query_params.get('token', [''])[0]
+            device = query_params.get('device_id', ['mobile'])[0]
+            page   = f"""<!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>CrossWatch — Pair Device</title>
+                <style>
+                    *{{margin:0;padding:0;box-sizing:border-box}}
+                    body{{font-family:sans-serif;background:#080c14;color:#dce8f5;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}}
+                    .card{{width:100%;max-width:380px;background:#0d1320;border:1px solid #1e2d42;border-radius:16px;padding:32px 24px;text-align:center}}
+                    h1{{font-size:22px;font-weight:800;margin-bottom:6px}}
+                    h1 span{{color:#00c2ff}}
+                    p{{font-size:14px;color:#6e8caa;margin-bottom:24px}}
+                    .btn{{width:100%;padding:14px;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;margin-top:10px}}
+                    .btn-pair{{background:#00c2ff;color:#080c14}}
+                    .btn-deny{{background:#1e2d42;color:#6e8caa}}
+                    .status{{margin-top:20px;font-size:14px;padding:12px;border-radius:8px;display:none}}
+                    .status.ok{{background:rgba(0,224,160,0.1);color:#00e0a0;display:block}}
+                    .status.err{{background:rgba(255,82,112,0.1);color:#ff5270;display:block}}
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h1>Cross<span>Watch</span></h1>
+                    <p>A device wants to connect and monitor activity.</p>
+                    <button class="btn btn-pair" onclick="sendPair(true)">Approve Pairing</button>
+                    <button class="btn btn-deny" onclick="sendPair(false)">Deny</button>
+                    <div class="status" id="status"></div>
+                </div>
+                <script>
+                const TOKEN   = "{token}";
+                const DEVICE  = "{device}";
+                const HOST    = window.location.hostname;
+
+                async function sendPair(approve) {{
+                    const st = document.getElementById('status');
+                    try {{
+                    const r = await fetch('/api/pair/complete', {{
+                        method: 'POST',
+                        headers: {{'Content-Type': 'application/json'}},
+                        body: JSON.stringify({{token: TOKEN, device_id: DEVICE}})
+                    }});
+                    const d = await r.json();
+                    if (d.ok) {{
+                        st.className = 'status ok';
+                        st.textContent = 'Pairing request sent. Waiting for owner to confirm…';
+                        pollStatus();
+                    }} else {{
+                        st.className = 'status err';
+                        st.textContent = 'Failed: ' + d.reason;
+                    }}
+                }} catch(e) {{
+                        st.className = 'status err';
+                        st.textContent = 'Could not reach server.';
+                    }}
+                }}
+
+                function pollStatus() {{
+                    const st = document.getElementById('status');
+                    const iv = setInterval(async () => {{
+                    try {{
+                        const r = await fetch('/api/pair/status?token=' + TOKEN);
+                        const d = await r.json();
+                        if (d.status === 'approved') {{
+                        clearInterval(iv);
+                        st.className = 'status ok';
+                        st.textContent = 'Paired successfully!';
+                        }} else if (d.status === 'denied' || d.status === 'expired') {{
+                        clearInterval(iv);
+                        st.className = 'status err';
+                        st.textContent = 'Pairing ' + d.status + '.';
+                        }}
+                    }} catch(e) {{}}
+                    }}, 2000);
+                }}
+                </script>
+            </body>
+            </html>"""
+            self.wfile.write(page.encode('utf-8'))
+
         else:
             self.send_response(404)
             self.send_header('Content-type', 'text/html')
@@ -2038,6 +2549,7 @@ def run_server():
     local_ip = get_local_ip()
 
     load_sessions_from_disk()
+    load_paired_devices()
     start_csv_watcher()
     start_websocket_server_thread()
     time.sleep(0.5)  # Let WS loop initialise before printing

@@ -1,0 +1,8 @@
+psutil
+pywin32
+websockets
+cryptography
+qrcode[pil]
+pillow
+flask
+pytest
