@@ -1,0 +1,6 @@
+{
+    "device_id": "your-device-name",
+    "server_url": "http://localhost:8000",
+    "api_key": "your-password-here",
+    "post_to_server": false
+}
