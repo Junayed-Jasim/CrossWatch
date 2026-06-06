@@ -1,0 +1,4 @@
+psutil
+python-xlib
+pystray
+pillow
